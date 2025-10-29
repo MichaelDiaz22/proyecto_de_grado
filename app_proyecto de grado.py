@@ -110,9 +110,9 @@ if uploaded_file is not None:
         df_processed = df_processed.rename(columns=month_columns_mapping)
         st.write("✅ Nombres de columnas de meses normalizados")
 
-        # 3. Crear nuevas características agregadas
+        # 3. Definir SOLO las columnas de meses que se usarán para las predicciones
         monthly_cols_2024 = [f'2024-{i}' for i in range(1, 13)]
-        monthly_cols_2025 = [f'2025-{i}' for i in range(1, 10)]
+        monthly_cols_2025 = [f'2025-{i}' for i in range(1, 10)]  # Hasta 2025-9
         all_monthly_cols = monthly_cols_2024 + monthly_cols_2025
 
         # Asegurar que las columnas mensuales sean numéricas y manejar valores faltantes
@@ -123,18 +123,11 @@ if uploaded_file is not None:
                 # Si la columna no existe, crearla con ceros
                 df_processed[col] = 0
 
-        # Crear columnas agregadas
-        df_processed['TOTAL_CANTIDAD_2024'] = df_processed[monthly_cols_2024].sum(axis=1)
-        df_processed['PROMEDIO_CANTIDAD_2024'] = df_processed[monthly_cols_2024].mean(axis=1)
-        df_processed['TOTAL_CANTIDAD_2025'] = df_processed[monthly_cols_2025].sum(axis=1)
-        df_processed['PROMEDIO_CANTIDAD_2025'] = df_processed[monthly_cols_2025].mean(axis=1)
+        st.write("✅ Columnas de meses procesadas")
 
-        st.write("✅ Características agregadas creadas")
-
-        # 4. Seleccionar columnas numéricas para PCA y eliminar columnas vacías
-        numerical_cols_for_pca = ['VALOR_PROMEDIO', 'VALOR_FINAL', 'TOTAL_CANTIDAD_2024', 
-                                 'PROMEDIO_CANTIDAD_2024', 'TOTAL_CANTIDAD_2025', 
-                                 'PROMEDIO_CANTIDAD_2025'] + monthly_cols_2024 + monthly_cols_2025
+        # 4. Seleccionar SOLO las columnas de meses para el PCA y predicciones
+        # NO incluir VALOR_PROMEDIO, VALOR_FINAL ni las columnas agregadas
+        numerical_cols_for_pca = all_monthly_cols  # Solo columnas de meses
 
         # Filtrar columnas que existen en los datos procesados
         numerical_cols_for_pca = [col for col in numerical_cols_for_pca if col in df_processed.columns]
@@ -153,16 +146,16 @@ if uploaded_file is not None:
         
         numerical_cols_for_pca = non_empty_cols
         
-        st.write(f"🔢 Columnas numéricas para PCA: {len(numerical_cols_for_pca)}")
-        st.write(f"🗑️ Columnas vacías eliminadas: {len(empty_cols)}")
+        st.write(f"🔢 Columnas de meses para PCA: {len(numerical_cols_for_pca)}")
+        st.write(f"🗑️ Columnas de meses vacías eliminadas: {len(empty_cols)}")
         if empty_cols:
             st.write(f"Columnas eliminadas: {empty_cols}")
 
         if len(numerical_cols_for_pca) == 0:
-            st.error("❌ Error: No se encontraron columnas numéricas válidas para el modelo.")
+            st.error("❌ Error: No se encontraron columnas de meses válidas para el modelo.")
             st.stop()
 
-        # Separar los datos numéricos para escalado y PCA
+        # Separar SOLO los datos de meses para escalado y PCA
         df_numerical_processed = df_processed[numerical_cols_for_pca]
 
         # 5. Aplicar el StandardScaler
@@ -192,6 +185,11 @@ if uploaded_file is not None:
             
             if missing_features:
                 st.warning(f"⚠️ Características faltantes para PCA: {list(missing_features)}")
+                # Agregar características faltantes con valor 0
+                for feature in missing_features:
+                    if feature not in df_scaled_processed.columns:
+                        df_scaled_processed[feature] = 0
+            
             if extra_features:
                 st.warning(f"⚠️ Características adicionales no usadas en PCA: {list(extra_features)}")
             
@@ -204,14 +202,26 @@ if uploaded_file is not None:
                                       index=df_processed.index)
         st.write("✅ PCA aplicado exitosamente")
 
-        # 7. Identificar e incluir columnas binarias
-        binary_cols = [col for col in df_processed.columns if col not in numerical_cols_for_pca and df_processed[col].nunique() <= 2]
+        # 7. Identificar e incluir columnas binarias (si las hay)
+        # Excluir columnas de meses y columnas de valores de las binarias
+        excluded_cols = numerical_cols_for_pca + ['VALOR_PROMEDIO', 'VALOR_FINAL', 
+                                                 'TOTAL_CANTIDAD_2024', 'PROMEDIO_CANTIDAD_2024',
+                                                 'TOTAL_CANTIDAD_2025', 'PROMEDIO_CANTIDAD_2025']
+        
+        binary_cols = [col for col in df_processed.columns 
+                      if col not in excluded_cols and df_processed[col].nunique() <= 2]
+        
         df_binary_processed = df_processed[binary_cols]
         
         st.write(f"🔢 Columnas binarias identificadas: {len(binary_cols)}")
+        if binary_cols:
+            st.write(f"Columnas binarias: {binary_cols}")
 
         # Concatenar componentes PCA con columnas binarias
-        df_final_features = pd.concat([df_pca_processed, df_binary_processed], axis=1)
+        if not df_binary_processed.empty:
+            df_final_features = pd.concat([df_pca_processed, df_binary_processed], axis=1)
+        else:
+            df_final_features = df_pca_processed
 
         # --- Hacer predicciones usando el modelo cargado ---
         st.write("🔮 Generando predicciones...")
@@ -237,7 +247,12 @@ if uploaded_file is not None:
         st.write("**Vista previa de los resultados:**")
         columns_to_show = ['CODIGO_PRODUCTO', 'DESCRIPCION_PRODUCTO', 'Proyección de consumo próximo mes (Predicción)']
         available_columns = [col for col in columns_to_show if col in df_processed.columns]
-        st.dataframe(df_processed[available_columns].head())
+        
+        # Mostrar también algunas columnas de meses para referencia
+        sample_month_cols = [col for col in numerical_cols_for_pca[-6:]]  # Últimos 6 meses
+        display_columns = available_columns + sample_month_cols
+        
+        st.dataframe(df_processed[display_columns].head())
 
         # Proporcionar enlace de descarga para el archivo Excel actualizado
         output_filename = "historico_con_proyeccion.xlsx"
